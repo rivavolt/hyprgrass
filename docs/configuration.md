@@ -1,5 +1,66 @@
 # Configuration
 
+Hyprgrass supports both the legacy hyprlang config (`hyprland.conf`) and the
+Lua config (`hyprland.lua`) introduced in Hyprland 0.55.
+
+The rest of this document uses hyprlang syntax. To translate it to Lua:
+
+- **Options** (`sensitivity`, `edge_margin`, ...) go through `hl.config`, since
+  they are ordinary config values:
+
+  ```lua
+  hl.config({
+      plugin = {
+          touch_gestures = {
+              sensitivity = 4.0,
+              edge_margin = 50,
+          },
+      },
+  })
+  ```
+
+- **Binds and gestures** are exposed as functions on the `hl` table once the
+  plugin is loaded. They can't be expressed as `hl.config` table keys because a
+  Lua table cannot hold duplicate keys, and you usually want more than one bind.
+
+  | hyprlang keyword    | Lua function                          |
+  | ------------------- | ------------------------------------- |
+  | `hyprgrass-bind`    | `hl.plugin.touch_gestures.bind`       |
+  | `hyprgrass-bindm`   | `hl.plugin.touch_gestures.bindm`      |
+  | `hyprgrass-bindl`   | `hl.plugin.touch_gestures.bindl`      |
+  | `hyprgrass-gesture` | `hl.plugin.touch_gestures.gesture`    |
+
+  Each function takes the same fields the keyword does, either as one
+  comma-delimited string or as separate arguments:
+
+  ```lua
+  -- load the plugin first
+  hl.plugin.load("/path/to/libhyprgrass.so")
+
+  -- hl.plugin.touch_gestures.* only exists after the plugin is loaded, so
+  -- guard the call. Hyprland re-evaluates the config once the plugin loads.
+  if hl.plugin.touch_gestures then
+      local tg = hl.plugin.touch_gestures
+
+      -- equivalent to:
+      --   hyprgrass-bind = , tap:3, exec, $menu -k
+      tg.bind(", tap:3, exec, $menu -k")
+
+      -- separate arguments work too:
+      --   hyprgrass-bind = , edge:d:u, exec, firefox
+      tg.bind("", "edge:d:u", "exec", "firefox")
+
+      -- mouse binds (hyprgrass-bindm):
+      --   hyprgrass-bindm = , longpress:2, movewindow
+      --   hyprgrass-bindm = , longpress:3, resizewindow
+      tg.bindm(", longpress:2, movewindow")
+      tg.bindm(", longpress:3, resizewindow")
+
+      -- hyprgrass-gesture = swipe, 3, down, close
+      tg.gesture("swipe, 3, down, close")
+  end
+  ```
+
 ## Options
 
 ```hyprlang

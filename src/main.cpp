@@ -33,6 +33,11 @@
 #include <hyprutils/string/ConstVarList.hpp>
 #undef private
 
+extern "C" {
+#include <lua.h>
+#include <lauxlib.h>
+}
+
 #include <memory>
 #include <string>
 
@@ -57,19 +62,20 @@ void hkOnTouchMove(ITouch::SMotionEvent ev, Event::SCallbackInfo& cbinfo) {
     cbinfo.cancelled = g_pGestureManager->onTouchMove(ev);
 }
 
-static Hyprlang::CParseResult hyprgrassGestureKeyword(const char* LHS, const char* RHS) {
-    Hyprlang::CParseResult result;
-
+// Core hyprgrass-gesture handler, shared by the legacy hyprlang keyword and the
+// Lua `hl.plugin.touch_gestures.gesture` function.
+//
+// `flags` is the trailing flag string (e.g. "p"); `RHS` is the comma-delimited
+// gesture definition that the keyword/function received.
+static std::expected<void, std::string> addHyprgrassGesture(const std::string& flags, const char* RHS) {
     if (g_unloading)
-        return result;
+        return {};
 
     Hyprutils::String::CConstVarList data(RHS);
 
     auto maybePattern = parseGesturePattern(data);
-    if (!maybePattern) {
-        result.setError(maybePattern.error().data());
-        return result;
-    }
+    if (!maybePattern)
+        return std::unexpected(std::string(maybePattern.error()));
     GestureConfig pattern = maybePattern.value();
 
     int startDataIdx    = 3;
@@ -77,15 +83,13 @@ static Hyprlang::CParseResult hyprgrassGestureKeyword(const char* LHS, const cha
     float deltaScale    = 1.F;
     bool disableInhibit = false;
 
-    const int prefix_size = std::size(KEYWORD_HG_GESTURE);
-    for (const auto arg : std::string(LHS).substr(prefix_size)) {
+    for (const auto arg : flags) {
         switch (arg) {
             case 'p':
                 disableInhibit = true;
                 break;
             default:
-                result.setError("hyprgrass-gesture: invalid flag");
-                return result;
+                return std::unexpected("hyprgrass-gesture: invalid flag");
         }
     }
 
@@ -101,10 +105,9 @@ static Hyprlang::CParseResult hyprgrassGestureKeyword(const char* LHS, const cha
                 startDataIdx++;
                 continue;
             } catch (...) {
-                result.setError(
-                    std::format("Invalid delta scale: {}", std::string(data[startDataIdx].substr(6))).c_str()
+                return std::unexpected(
+                    std::format("Invalid delta scale: {}", std::string(data[startDataIdx].substr(6)))
                 );
-                return result;
             }
         }
 
@@ -168,35 +171,38 @@ static Hyprlang::CParseResult hyprgrassGestureKeyword(const char* LHS, const cha
         try {
             fingers = std::stoul(std::string(fingersStr));
         } catch (std::invalid_argument) {
-            result.setError(std::format("Argument for emulate_touchpad expects a number, got: {}", fingersStr).c_str());
-            return result;
+            return std::unexpected(std::format("Argument for emulate_touchpad expects a number, got: {}", fingersStr));
         }
 
         eTrackpadGestureDirection dir = g_pTrackpadGestures->dirForString(data[startDataIdx + 2]);
         if (ShimTrackpadGestures::isPinch(pattern.direction) != ShimTrackpadGestures::isPinch(dir)) {
-            if (ShimTrackpadGestures::isPinch(dir)) {
-                result.setError("emulate_touchpad: pinch gestures need to be bound to pinch touch direction");
-            } else {
-                result.setError(
-                    "emulate_touchpad: non-pinch gestures need to be bound to bind to a non-pinch touch direction"
-                );
-            }
-            return result;
+            if (ShimTrackpadGestures::isPinch(dir))
+                return std::unexpected("emulate_touchpad: pinch gestures need to be bound to pinch touch direction");
+            return std::unexpected(
+                "emulate_touchpad: non-pinch gestures need to be bound to bind to a non-pinch touch direction"
+            );
         }
 
         resultFromGesture = std::expected(handler->addGesture(
             makeUnique<EmulateTouchpadGesture>(fingers, dir), pattern.fingers, pattern.direction, modMask, deltaScale,
             disableInhibit
         ));
-    } else {
-        result.setError(std::format("Invalid gesture: {}", data[startDataIdx]).c_str());
-        return result;
-    }
+    } else
+        return std::unexpected(std::format("Invalid gesture: {}", data[startDataIdx]));
 
-    if (!resultFromGesture) {
-        result.setError(resultFromGesture.error().c_str());
-        return result;
-    }
+    if (!resultFromGesture)
+        return std::unexpected(resultFromGesture.error());
+
+    return {};
+}
+
+static Hyprlang::CParseResult hyprgrassGestureKeyword(const char* LHS, const char* RHS) {
+    Hyprlang::CParseResult result;
+
+    const int prefix_size = std::size(KEYWORD_HG_GESTURE);
+    const auto res        = addHyprgrassGesture(std::string(LHS).substr(prefix_size), RHS);
+    if (!res)
+        result.setError(res.error().c_str());
 
     return result;
 }
@@ -246,24 +252,25 @@ SDispatchResult listInternalBinds(std::string) {
     return SDispatchResult{.success = true};
 }
 
-Hyprlang::CParseResult hyrgrassBindKeyword(const char* K, const char* V) {
+// Core hyprgrass-bind handler, shared by the legacy hyprlang keyword and the
+// Lua `hl.plugin.touch_gestures.bind*` functions.
+//
+// `flagStr` is the trailing flag string (e.g. "m", "l", "ml"); `V` is the
+// comma-delimited bind definition `<mods>, <gesture_event>, <dispatcher>, [args]`.
+static std::expected<void, std::string> addHyprgrassBind(const std::string& flagStr, const std::string& V) {
     std::string v = V;
     auto vars     = Hyprutils::String::CVarList(v, 4);
-    Hyprlang::CParseResult result;
     struct {
         bool mouse;
         bool locked;
     } flags = {};
 
-    if (vars.size() < 3) {
-        result.setError("must have at least 3 fields: <empty>, <gesture_event>, <dispatcher>, [args]");
-        return result;
-    }
+    if (vars.size() < 3)
+        return std::unexpected("must have at least 3 fields: <empty>, <gesture_event>, <dispatcher>, [args]");
 
     uint32_t modMask = g_pKeybindManager->stringToModMask(vars[0]);
 
-    const int prefix_size = std::size(KEYWORD_HG_BIND);
-    for (char c : std::string(K).substr(prefix_size)) {
+    for (char c : flagStr) {
         switch (c) {
             case 'm':
                 flags.mouse = true;
@@ -291,7 +298,80 @@ Hyprlang::CParseResult hyrgrassBindKeyword(const char* K, const char* V) {
         .mouse   = flags.mouse,
     }));
 
+    return {};
+}
+
+Hyprlang::CParseResult hyrgrassBindKeyword(const char* K, const char* V) {
+    Hyprlang::CParseResult result;
+
+    const int prefix_size = std::size(KEYWORD_HG_BIND);
+    const auto res        = addHyprgrassBind(std::string(K).substr(prefix_size), V);
+    if (!res)
+        result.setError(res.error().c_str());
+
     return result;
+}
+
+// Collects every argument passed to a Lua function into a single
+// comma-delimited string, equivalent to the value the hyprlang keyword received.
+//
+// Each argument may itself be a comma-delimited fragment, so both calling
+// styles work:
+//   hl.plugin.touch_gestures.bind(", tap:3, exec, firefox")
+//   hl.plugin.touch_gestures.bind("", "tap:3", "exec", "firefox")
+static std::string luaArgsToValueString(lua_State* L) {
+    std::string out;
+    const int   n = lua_gettop(L);
+    for (int i = 1; i <= n; i++) {
+        if (i > 1)
+            out += ", ";
+        size_t      len = 0;
+        const char* s   = luaL_tolstring(L, i, &len); // pushes a string copy
+        out.append(s, len);
+        lua_pop(L, 1);
+    }
+    return out;
+}
+
+// hl.plugin.touch_gestures.bind / bindm / bindl
+// Each invocation registers exactly one gesture bind, sidestepping the Lua
+// table duplicate-key limitation of trying to express binds via hl.config.
+static int luaHyprgrassBindFlags(lua_State* L, const std::string& flags) {
+    if (g_unloading || !g_pGestureManager)
+        return 0;
+
+    const auto res = addHyprgrassBind(flags, luaArgsToValueString(L));
+    if (!res) {
+        lua_pushstring(L, std::format("hyprgrass-bind: {}", res.error()).c_str());
+        return lua_error(L);
+    }
+    return 0;
+}
+
+static int luaHyprgrassBind(lua_State* L) {
+    return luaHyprgrassBindFlags(L, "");
+}
+
+static int luaHyprgrassBindm(lua_State* L) {
+    return luaHyprgrassBindFlags(L, "m");
+}
+
+static int luaHyprgrassBindl(lua_State* L) {
+    return luaHyprgrassBindFlags(L, "l");
+}
+
+// hl.plugin.touch_gestures.gesture
+static int luaHyprgrassGesture(lua_State* L) {
+    if (g_unloading)
+        return 0;
+
+    const auto value = luaArgsToValueString(L);
+    const auto res   = addHyprgrassGesture("", value.c_str());
+    if (!res) {
+        lua_pushstring(L, std::format("hyprgrass-gesture: {}", res.error()).c_str());
+        return lua_error(L);
+    }
+    return 0;
 }
 
 std::shared_ptr<HOOK_CALLBACK_FN> g_pTouchDownHook;
@@ -334,12 +414,24 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         PHANDLE, "plugin:touch_gestures:debug:visualize_touch", Hyprlang::CConfigValue((Hyprlang::INT)0)
     );
 
+    // Legacy hyprlang config (hyprland.conf). addConfigKeyword is a no-op when
+    // the active config is Lua-based, so this stays harmless for Lua users.
     HyprlandAPI::addConfigKeyword(
         PHANDLE, KEYWORD_HG_BIND, hyrgrassBindKeyword, Hyprlang::SHandlerOptions{.allowFlags = true}
     );
     HyprlandAPI::addConfigKeyword(
         PHANDLE, KEYWORD_HG_GESTURE, hyprgrassGestureKeyword, Hyprlang::SHandlerOptions{true}
     );
+
+    // Lua config (hyprland.lua). Each function maps 1:1 to a hyprlang keyword
+    // and may be called any number of times, unlike a Lua table key. These are
+    // exposed under the global `hl` table as hl.plugin.touch_gestures.<name>.
+    // addLuaFunction is a no-op when the active config is legacy hyprlang.
+    HyprlandAPI::addLuaFunction(PHANDLE, "touch_gestures", "bind", luaHyprgrassBind);
+    HyprlandAPI::addLuaFunction(PHANDLE, "touch_gestures", "bindm", luaHyprgrassBindm);
+    HyprlandAPI::addLuaFunction(PHANDLE, "touch_gestures", "bindl", luaHyprgrassBindl);
+    HyprlandAPI::addLuaFunction(PHANDLE, "touch_gestures", "gesture", luaHyprgrassGesture);
+
     static auto P0 = Event::bus()->m_events.config.preReload.listen([&] { onPreConfigReload(); });
 
     HyprlandAPI::addDispatcherV2(PHANDLE, "touchBind", [&](std::string args) {

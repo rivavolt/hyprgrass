@@ -30,6 +30,14 @@ if get_option('hyprgrass')
   endif
 endif
 
+# Hyprland 0.55+ embeds Lua 5.5 for its Lua config; plugins that expose
+# functions to the `hl` table (via HyprlandAPI::addLuaFunction) need its headers.
+lua_dep = dependency(
+  'lua55', 'lua5.5', 'lua-5.5', 'lua',
+  version: ['>=5.5', '<5.6'],
+  required: false,
+)
+
 hyprland_deps = [
   dependency('pixman-1'),
   dependency('libinput'),
@@ -37,6 +45,10 @@ hyprland_deps = [
   dependency('xkbcommon'),
   dependency('libdrm'),
 ]
+
+if lua_dep.found()
+  hyprland_deps += lua_dep
+endif
 
 subdir('examples')
 subdir('src')
