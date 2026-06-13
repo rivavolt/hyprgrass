@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 0 * * *" # daily at midnight
+permissions:
+  contents: write
+  pull-requests: write
 jobs:
   pin-latest-hyprland:
     runs-on: ubuntu-latest
@@ -73,7 +76,7 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GH_TOKEN_FOR_UPDATES }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: 'ci: automated update of hyprpm.toml'
           title: 'Automated PR: Update hyprpm pin'
           body: 'This PR was created by a Github Actions workflow'
