@@ -73,10 +73,19 @@ jobs:
             echo "Successfully created and pushed tag $TAG_NAME"
           fi
 
+      # Mint an avolt-clawd-sandbox App installation token: the default GITHUB_TOKEN is forbidden from creating PRs (the "Allow GitHub Actions to create and approve pull requests" org/repo toggle is off), so the create-pull-request POST 403s. An App identity is not subject to that restriction, and it also lets the resulting PR trigger downstream checks.yml/cache.yml runs (GITHUB_TOKEN-pushed branches don't fire further workflows).
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           commit-message: 'ci: automated update of hyprpm.toml'
           title: 'Automated PR: Update hyprpm pin'
           body: 'This PR was created by a Github Actions workflow'
