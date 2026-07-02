@@ -70,7 +70,6 @@ void Visualizer::onTouchUp(ITouch::SUpEvent ev) {
     auto mon = Desktop::focusState()->monitor();
     this->damageFinger(ev.touchID);
     this->finger_positions.erase(ev.touchID);
-//    g_pCompositon->scheduleFrameForMonitor(Desktop::focusState()->monitor());
     mon->scheduleFrame();
 // prego iddio funzioni
 }
