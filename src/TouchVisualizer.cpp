@@ -2,7 +2,7 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/render/Renderer.hpp>
-
+#define PI 3.1415926535897323846
 CBox boxAroundCenter(Vector2D center, double radius) {
     return CBox(center.x - radius, center.y - radius, 2 * radius, 2 * radius);
 }
@@ -63,19 +63,22 @@ void Visualizer::onRender() {
 void Visualizer::onTouchDown(ITouch::SDownEvent ev) {
     auto mon = Desktop::focusState()->monitor();
     this->finger_positions.emplace(ev.touchID, FingerPos{ev.pos * mon->m_pixelSize + mon->m_position, std::nullopt});
-    g_pCompositor->scheduleFrameForMonitor(mon);
+    mon->scheduleFrame();
 }
 
 void Visualizer::onTouchUp(ITouch::SUpEvent ev) {
+    auto mon = Desktop::focusState()->monitor();
     this->damageFinger(ev.touchID);
     this->finger_positions.erase(ev.touchID);
-    g_pCompositor->scheduleFrameForMonitor(Desktop::focusState()->monitor());
+//    g_pCompositon->scheduleFrameForMonitor(Desktop::focusState()->monitor());
+    mon->scheduleFrame();
+// prego iddio funzioni
 }
 
 void Visualizer::onTouchMotion(ITouch::SMotionEvent ev) {
     auto mon                           = Desktop::focusState()->monitor();
     this->finger_positions[ev.touchID] = {ev.pos * mon->m_pixelSize + mon->m_position, std::nullopt};
-    g_pCompositor->scheduleFrameForMonitor(mon);
+    mon->scheduleFrame();
 }
 
 void Visualizer::damageFinger(int32_t id) {
