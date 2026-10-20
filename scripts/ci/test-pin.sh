@@ -9,36 +9,33 @@ echoerr () {
 if [ -z "${1:-}" ]; then
 	echoerr "Usage:"
 	echoerr ""
-	echoerr "	test-pin HYPRLAND_REV [HYPRGRASS_REV]"
+	echoerr "	test-pin HYPRLAND_TAG [HYPRGRASS_REV]"
 	echoerr ""
-	echoerr "Runs tests with specified rev and prints the commit SHA of both repo"
+	echoerr "Builds and tests HYPRGRASS_REV against the Hyprland release HYPRLAND_TAG as packaged"
+	echoerr "in nixos-unstable, and prints the hyprpm.toml pin of both commits."
 	echoerr ""
 	echoerr "HYPRGRASS_REV defaults to 'main'"
 	exit 1
 fi
 
-hyprlandRev=${1}
+hyprlandTag=${1}
 hyprgrassRev=${2:-main}
 
-hyprlandCommit="$(git ls-remote https://github.com/hyprwm/Hyprland.git "${hyprlandRev}" | cut -f 1)"
+hyprlandCommit="$(git ls-remote https://github.com/hyprwm/Hyprland.git "${hyprlandTag}" | cut -f 1)"
 hyprgrassCommit="$(git rev-parse "${hyprgrassRev}")"
 
-hlUrl="github:hyprwm/Hyprland/${hyprlandRev}" 
+# Hyprland comes from nixpkgs, the distro build hyprpm users compile plugins against, which nixpkgs keeps buildable and caches; a release's own flake.lock can lock a nixpkgs it does not build with (v0.56.2's has glaze 8, which its CMakeLists rejects).
+nix build --no-link --impure --expr "
+	let
+		hyprgrass = builtins.getFlake \"git+file://$(git rev-parse --show-toplevel)?rev=${hyprgrassCommit}\";
+		pkgs = import (builtins.getFlake \"${NIXPKGS:-github:NixOS/nixpkgs/nixos-unstable}\") {
+			system = builtins.currentSystem;
+			overlays = [hyprgrass.overlays.default];
+		};
+	in
+		assert pkgs.lib.assertMsg (\"v\${pkgs.hyprland.version}\" == \"${hyprlandTag}\")
+			\"nixpkgs packages Hyprland v\${pkgs.hyprland.version}, not ${hyprlandTag}\";
+		pkgs.hyprlandPlugins.hyprgrass.override {runTests = true;}
+" >&2
 
-worktreeDir="pin-build"
-
-{
-	git worktree add "$worktreeDir" "$hyprgrassCommit"
-	trap "git worktree remove --force '$worktreeDir'" EXIT INT HUP TERM
-	cd "$worktreeDir"
-	git fetch --unshallow
-
-	# NOTE: nix build --override-input does not override input of inputs, i.e. hyprland/aquamarine
-	# will not be updated, hence we need to run `flake update` :<
-	nix flake update --override-input hyprland "$hlUrl"
-	nix build --no-link '.#hyprgrassWithTests'
-
-	cd ..
-} >&2 # avoid cluttering stdout
-
-echo "[\"${hyprlandCommit}\", \"${hyprgrassCommit}\"], # ${hyprlandRev}"
+echo "[\"${hyprlandCommit}\", \"${hyprgrassCommit}\"], # ${hyprlandTag}"

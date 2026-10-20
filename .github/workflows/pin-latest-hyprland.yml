@@ -16,9 +16,6 @@ jobs:
       - uses: cachix/install-nix-action@v30
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          extra_nix_config: |
-            extra-substituters = https://hyprland.cachix.org
-            extra-trusted-public-keys = hyprland.cachix.org-1:a7pgxzMz7+chwVL3/pzj6jIBMioiJM7ypFP8PwtkuGc=
       - name: Update pins
         id: update_pins
         env:
@@ -26,7 +23,6 @@ jobs:
         run: |
           set -eu
           set -m   # workaround: I get "fg: no job control" even though I don't use any job control
-          git fetch --depth=1 --tags origin main
 
           # Run pin-latest-hyprland and capture output
           PIN_OUTPUT=$(./scripts/ci/pin-latest-hyprland origin/main)

@@ -48,6 +48,15 @@ if findHyprpmPin "$hlCommit"; then
     exit 0
 fi
 
+# test-pin.sh builds against this same nixpkgs revision.
+NIXPKGS="github:NixOS/nixpkgs/$(git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/nixos-unstable | cut -f 1)"
+export NIXPKGS
+nixpkgsVersion="$(nix eval --raw "$NIXPKGS#hyprland.version")"
+if [ "v$nixpkgsVersion" != "$hlTag" ]; then
+    echoerr "nixos-unstable still packages Hyprland v$nixpkgsVersion, waiting for it to package $hlTag"
+    exit 0
+fi
+
 echoerr "building and testing..."
 commitPin="$("$SCRIPT_DIR/test-pin.sh" "$hlTag" "$hgCommit")"
 
